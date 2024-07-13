@@ -1,108 +1,249 @@
-# HNGdevops-stage3
+### Step-by-Step Guide for Setting Up Messaging System with RabbitMQ/Celery and Python Application Behind Nginx
 
-Here's a guide to help you complete the DevOps Stage 3 Task:
+#### Objective:
+Deploy a Python application behind Nginx that interacts with RabbitMQ/Celery for email sending and logging functionality.
 
-### Local Setup
+---
 
-1. **Install RabbitMQ and Celery**:
-    - Install RabbitMQ: [RabbitMQ installation guide](https://www.rabbitmq.com/download.html).
-    - Install Celery: `pip install celery`.
+### 1. Local Setup
 
-2. **Set up Python Application**:
-    - Create a new Python project and set up a virtual environment.
-    - Install necessary packages: `pip install Flask smtplib`.
+#### 1.1 Install RabbitMQ
+- **Install RabbitMQ**:
+  ```bash
+  sudo apt-get update
+  sudo apt-get install rabbitmq-server
+  sudo systemctl enable rabbitmq-server
+  sudo systemctl start rabbitmq-server
+  ```
 
-3. **Python Application Functionality**:
-    - Create a `app.py` file:
-        ```python
-        from flask import Flask, request
-        import smtplib
-        from celery import Celery
-        import logging
-        from datetime import datetime
+- **Verify Installation**:
+  ```bash
+  sudo rabbitmqctl status
+  ```
 
-        app = Flask(__name__)
-        app.config['CELERY_BROKER_URL'] = 'pyamqp://guest@localhost//'
-        app.config['CELERY_RESULT_BACKEND'] = 'rpc://'
+#### 1.2 Install Celery
+- **Install Celery using pip**:
+  ```bash
+  pip install celery
+  ```
 
-        celery = Celery(app.name, broker=app.config['CELERY_BROKER_URL'])
-        celery.conf.update(app.config)
+#### 1.3 Install Flask
+- **Install Flask using pip**:
+  ```bash
+  pip install flask
+  ```
 
-        @celery.task
-        def send_email(to_email):
-            server = smtplib.SMTP('smtp.your-email.com', 587)
-            server.starttls()
-            server.login("youremail@domain.com", "password")
-            message = "Subject: Test\n\nThis is a test email"
-            server.sendmail("youremail@domain.com", to_email, message)
-            server.quit()
+#### 1.4 Install python-dotenv
+- **Install python-dotenv to manage environment variables**:
+  ```bash
+  pip install python-dotenv
+  ```
 
-        @app.route('/')
-        def index():
-            sendmail = request.args.get('sendmail')
-            talktome = request.args.get('talktome')
+### 2. Set Up Python Application
 
-            if sendmail:
-                send_email.delay(sendmail)
-                return f'Email will be sent to {sendmail}', 200
+#### 2.1 Create Application Structure
+```bash
+mkdir messaging_system
+cd messaging_system
+touch app.py tasks.py .env
+```
 
-            if talktome:
-                with open("/var/log/messaging_system.log", "a") as log_file:
-                    log_file.write(f'{datetime.now()}\n')
-                return 'Logged the current time.', 200
+#### 2.2 Define the Flask Application (app.py)
+Create and edit `app.py`:
+```python
+from flask import Flask, request
+from tasks import send_email_task
+import logging
+import datetime
+from dotenv import load_dotenv
+import os
 
-            return 'Invalid parameters', 400
+# Load environment variables
+load_dotenv()
 
-        if __name__ == '__main__':
-            app.run(debug=True)
-        ```
+app = Flask(__name__)
 
-### Nginx Configuration
+# Set up logging
+logging.basicConfig(filename='/var/log/messaging_system.log', level=logging.INFO)
 
-1. **Install Nginx**:
-    - Install Nginx: `sudo apt-get install nginx`.
+@app.route('/')
+def index():
+    if 'sendmail' in request.args:
+        email = request.args.get('sendmail')
+        send_email_task.delay(email)
+        return f"Email to {email} has been queued."
+    
+    if 'talktome' in request.args:
+        current_time = datetime.datetime.now().isoformat()
+        logging.info(f"Current time logged: {current_time}")
+        return f"Logged current time: {current_time}"
+    
+    return "Please provide a valid parameter (?sendmail or ?talktome)."
 
-2. **Configure Nginx**:
-    - Create a new configuration file in `/etc/nginx/sites-available/`:
-        ```
-        server {
-            listen 80;
+if __name__ == "__main__":
+    app.run(debug=True)
+```
 
-            location / {
-                proxy_pass http://127.0.0.1:5000;
-                proxy_set_header Host $host;
-                proxy_set_header X-Real-IP $remote_addr;
-                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-                proxy_set_header X-Forwarded-Proto $scheme;
-            }
-        }
-        ```
-    - Enable the configuration: `sudo ln -s /etc/nginx/sites-available/your_config /etc/nginx/sites-enabled/`.
-    - Restart Nginx: `sudo systemctl restart nginx`.
+#### 2.3 Define Celery Tasks (tasks.py)
+Create and edit `tasks.py`:
+```python
+from celery import Celery
+import smtplib
+import os
+import logging
 
-### Expose Endpoint using Ngrok
+# Initialize Celery
+app = Celery('tasks', broker='pyamqp://guest@localhost//')
 
-1. **Install Ngrok**:
-    - Download and install Ngrok from [ngrok.com](https://ngrok.com/).
+# Configure logging
+logging.basicConfig(filename='/var/log/messaging_system.log', level=logging.INFO)
 
-2. **Expose Local Server**:
-    - Run Ngrok: `ngrok http 80`.
-    - Note the provided forwarding URL for external access.
+@app.task
+def send_email_task(email):
+    try:
+        # Retrieve email credentials from environment variables
+        email_user = os.getenv('EMAIL_USER')
+        email_password = os.getenv('EMAIL_PASSWORD')
 
-### Documentation and Walk-through
+        if not email_user or not email_password:
+            raise ValueError("Email credentials are not set in the environment variables.")
 
-1. **Record Screen-captured Walk-through**:
-    - Use a tool like OBS Studio or any screen recording software.
-    - Ensure you cover the entire setup and deployment process:
-        - RabbitMQ/Celery setup
-        - Python application development
-        - Nginx configuration
-        - Sending email via SMTP
-        - Logging current time
-        - Exposing the endpoint using Ngrok
+        # Set up the SMTP server
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(email_user, email_password)
 
-2. **Submission**:
-    - Provide the Ngrok endpoint for testing.
-    - Submit the screen recording through the [submission form](https://forms.gle/okhAFDnXQ5Dw6Ls39).
+        # Compose the email
+        subject = 'Test Email'
+        body = 'This is a test email.'
+        message = f'Subject: {subject}\n\n{body}'
 
-Ensure all specified features work correctly, document your code well, and make the screen recording clear and comprehensive.
+        # Send the email
+        server.sendmail(email_user, email, message)
+        server.quit()
+
+        logging.info(f"Email sent successfully to {email}")
+        return 'Email sent successfully!'
+    except Exception as e:
+        logging.error(f"Failed to send email to {email}: {e}")
+        return str(e)
+```
+
+#### 2.4 Set Up Environment Variables (.env)
+Create and edit the `.env` file:
+```
+EMAIL_USER=ougabriel@gmail.com
+EMAIL_PASSWORD=H@ppy097
+```
+
+### 3. Configure Nginx
+
+#### 3.1 Install Nginx
+```bash
+sudo apt-get install nginx
+```
+
+#### 3.2 Configure Nginx to Serve Flask Application
+- **Create an Nginx configuration file**:
+  ```bash
+  sudo nano /etc/nginx/sites-available/messaging_system
+  ```
+
+- **Add the following configuration**:
+  ```
+  server {
+      listen 80;
+      server_name localhost;
+
+      location / {
+          proxy_pass http://127.0.0.1:5000;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $scheme;
+      }
+  }
+  ```
+
+- **Enable the configuration**:
+  ```bash
+  sudo ln -s /etc/nginx/sites-available/messaging_system /etc/nginx/sites-enabled/
+  sudo nginx -t
+  sudo systemctl restart nginx
+  ```
+
+### 4. Expose the Application with ngrok
+
+#### 4.1 Install ngrok
+```bash
+wget https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-linux-amd64.zip
+unzip ngrok-stable-linux-amd64.zip
+sudo mv ngrok /usr/local/bin
+```
+
+#### 4.2 Expose Localhost
+```bash
+ngrok http 80
+```
+
+### 5. Documentation and Walk-through
+
+#### 5.1 Record the Walk-through
+- Use a screen recording tool like OBS Studio or any other screen capture software.
+- Ensure the recording covers:
+  - RabbitMQ/Celery setup
+  - Python application development
+  - Nginx configuration
+  - Sending email via SMTP
+  - Logging current time
+  - Exposing the endpoint using ngrok
+
+#### 5.2 Submission
+- **Provide the ngrok endpoint**.
+- **Submit the screen recording**.
+- **Ensure all requirements are met**.
+
+### 6. Submission Details
+- **Submission Link**: [Google Form](https://forms.gle/okhAFDnXQ5Dw6Ls39)
+- **Deadline**: Saturday, 12th July 2024, by 11:59 PM GMT
+
+---
+
+### Ports Required to be Open
+- **RabbitMQ**:
+  - Management Interface: `15672` (for accessing the RabbitMQ management UI)
+  - AMQP Port: `5672` (for communication between RabbitMQ and Celery)
+- **Flask**:
+  - Development Server: `5000` (used for running the Flask development server)
+- **Nginx**:
+  - HTTP Port: `80` (for serving the application via HTTP)
+- **ngrok**:
+  - No specific port, but it tunnels your local Nginx server on port `80`.
+
+#### Ensure Ports are Open
+
+##### For Ubuntu/Debian:
+- **Open Ports Using UFW (Uncomplicated Firewall)**
+  ```bash
+  sudo ufw allow 15672/tcp  # RabbitMQ Management Interface
+  sudo ufw allow 5672/tcp   # RabbitMQ AMQP
+  sudo ufw allow 80/tcp     # Nginx HTTP
+  sudo ufw allow 5000/tcp   # Flask (only if accessing directly without Nginx)
+  ```
+
+##### Enable UFW if it's not already enabled:
+```bash
+sudo ufw enable
+```
+
+##### Check UFW Status:
+```bash
+sudo ufw status
+```
+
+---
+
+### Final Notes
+- Ensure that your email credentials and server details in `tasks.py` are correct and secure.
+- Test the application thoroughly to confirm all functionalities before submitting.
+- Keep the ngrok endpoint active for testing until you receive confirmation of submission.
