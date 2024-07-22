@@ -8,7 +8,7 @@ Deploy a Python application behind Nginx that interacts with RabbitMQ/Celery for
 ### 1. Local Setup
 
 #### 1.1 Install RabbitMQ
-- **Install RabbitMQ**:
+- **Install RabbitMQ**: 
   ```bash
   sudo apt-get update
   sudo apt-get install rabbitmq-server
